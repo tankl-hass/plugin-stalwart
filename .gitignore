@@ -1,0 +1,11 @@
+node_modules/
+dist/
+coverage/
+.wrangler/
+.dev.vars
+.env
+wrangler.deploy.toml
+*.log
+.DS_Store
+__pycache__/
+scripts/local-jmap-cert/

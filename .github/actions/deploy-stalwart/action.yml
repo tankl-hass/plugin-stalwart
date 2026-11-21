@@ -1,0 +1,81 @@
+name: Deploy Stalwart front door and static webmail
+description: >-
+  Opt-in front door Worker with no public hostname plus asset-only Bulwark Lite
+  webmail on jmap.<base_domain>. Pinned to this release of
+  tankl-hass/plugin-stalwart; jadmin.<base_domain> is still served by the
+  Cloudflare Tunnel, not by either Worker.
+
+inputs:
+  cloudflare_api_token:
+    description: Cloudflare API token with Workers Scripts Edit permission.
+    required: true
+  cloudflare_account_id:
+    description: Cloudflare account ID.
+    required: true
+  base_domain:
+    description: Plain base domain (example.com); tunnel host is jadmin.<base_domain>.
+    required: true
+  front_door_worker_name:
+    description: Worker name for the optional transparent front door.
+    required: false
+    default: cloud-stalwart
+  webmail_worker_name:
+    description: Worker name for the asset-only webmail.
+    required: false
+    default: cloud-stalwart-webmail
+
+runs:
+  using: composite
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        BASE_DOMAIN: ${{ inputs.base_domain }}
+        FRONT_DOOR_WORKER_NAME: ${{ inputs.front_door_worker_name }}
+        WEBMAIL_WORKER_NAME: ${{ inputs.webmail_worker_name }}
+      run: |
+        if ! printf '%s' "$BASE_DOMAIN" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$' \
+          || [[ "$BASE_DOMAIN" == *..* ]] || [[ "$BASE_DOMAIN" != *.* ]] \
+          || [[ "$BASE_DOMAIN" == jadmin.* ]]; then
+          echo "::error::base_domain must be a bare base domain such as example.com"
+          exit 1
+        fi
+        for name in FRONT_DOOR_WORKER_NAME WEBMAIL_WORKER_NAME; do
+          value="${!name}"
+          if [[ ! "$value" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "::error::$name must match [a-zA-Z0-9_-]+"
+            exit 1
+          fi
+        done
+
+    - name: Install pinned toolchain
+      shell: bash
+      run: |
+        cd "${{ github.action_path }}/../.."
+        npm ci
+
+    - name: Deploy optional front door (no route, no workers.dev)
+      shell: bash
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare_api_token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare_account_id }}
+        BASE_DOMAIN: ${{ inputs.base_domain }}
+        FRONT_DOOR_WORKER_NAME: ${{ inputs.front_door_worker_name }}
+      run: |
+        cd "${{ github.action_path }}/../.."
+        sed "s|\${DOMAIN}|${BASE_DOMAIN}|g" wrangler-action.toml > wrangler.deploy.toml
+        if [ "$FRONT_DOOR_WORKER_NAME" != "cloud-stalwart" ]; then
+          sed -i "s|^name = .*|name = \"${FRONT_DOOR_WORKER_NAME}\"|" wrangler.deploy.toml
+        fi
+        ./node_modules/.bin/wrangler deploy -c wrangler.deploy.toml
+
+    - name: Deploy asset-only webmail on jmap.<base_domain>
+      shell: bash
+      env:
+        CLOUDFLARE_API_TOKEN: ${{ inputs.cloudflare_api_token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cloudflare_account_id }}
+        DOMAIN: ${{ inputs.base_domain }}
+        WEBMAIL_WORKER_NAME: ${{ inputs.webmail_worker_name }}
+      run: |
+        cd "${{ github.action_path }}/../.."
+        ./webmail/deploy.sh --deploy
